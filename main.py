@@ -72,7 +72,9 @@ async def on_message(message: discord.Message):
     # Get gpt's response
     response = await call_gpt(user_query, thread_id)
     if response is None:
-        response = "I'm sorry, I couldn't generate a response for you. Please try again later"
+        response = (
+            "I'm sorry, I couldn't generate a response for you. Please try again later"
+        )
 
     # If the message isn't too big we just send it. Otherwise, parse it accordingly
     if len(response) < 1900:
@@ -89,7 +91,10 @@ def format_user_query(message: discord.Message) -> list:
     user_query = message.content.split(f"<@{client.user.id}> ")[1]
     user_query = (
         user_query
-        + ". Format your response to be in markdown. \
+        + ". Format your response to be in markdown without any '```' wrappers. \
+        Do not provide anything but the markdown response itself. \
+        In addition, I am aware that you are an AI, so you do not need to mention that. \
+        Do not give warnings or notes about how the data may not be up to date or that you are an AI. \
         If your resposne is longer than 1900 characters, \
         please separate each ~1200 character blocks with a newline character"
     )
@@ -131,10 +136,7 @@ async def call_gpt(prompt: list, thread_id: int | None) -> str | None:
     new message), the method will send the prompt to gpt and return the response text
     """
     log.info(f"Using the following prompt when calling gpt api: {prompt}")
-    response = gpt.chat.completions.create(
-        model="gpt-4o", 
-        messages=prompt
-    )
+    response = gpt.chat.completions.create(model="gpt-4o", messages=prompt)
     log.info(f"Got the following candidates from GPT:\n {response.choices}")
     first_candidate = response.choices[0].message
     if thread_id:
