@@ -1,8 +1,19 @@
 import logging
+import json
 
 import discord
 from openai import OpenAI
 from yaml import Loader, load
+
+from utils.function_calling import get_transcription
+from utils.utils import (
+    get_gpt,
+    get_tools,
+    format_user_query,
+    handle_thread_message,
+    call_gpt,
+    send_large_message,
+)
 
 log = logging.getLogger(__name__)
 
@@ -11,17 +22,13 @@ intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
 
-
-# GPT client
-def get_gpt(api_key):
-    return OpenAI(api_key=api_key)
-
-
 with open("config.yaml", "r") as yml:
     config = load(yml, Loader=Loader)
-gpt = get_gpt(config["openai_api_key"])
+gpt: OpenAI = get_gpt(config["openai_api_key"])
 
 thread_conversation_history = {}
+
+tools = get_tools()
 
 
 @client.event
@@ -53,8 +60,10 @@ async def on_message(message: discord.Message):
     # Instantiate a "none" thread id for now
     thread_id = None
 
+    global thread_conversation_history
+
     # Format the user's question to ask for markdown, separate large blocks, etc.
-    user_query = format_user_query(message)
+    user_query = format_user_query(message, client)
 
     # If the message comes from a thread, we need to grab the ai chat history
     if message.channel.type in [
@@ -66,86 +75,63 @@ async def on_message(message: discord.Message):
         # previous_messages = [i.content async for i in message.channel.history(limit=100)
         # log.info(f'Previous messages: {previous_messages}')
 
-        user_query = handle_thread_message(message, user_query)
+        user_query = handle_thread_message(
+            message, user_query, thread_conversation_history
+        )
         thread_id = message.channel.id
 
     # Get gpt's response
-    response = await call_gpt(user_query, thread_id)
+    response = await call_gpt(
+        user_query, thread_id, gpt, thread_conversation_history, tools
+    )
     if response is None:
         response = (
             "I'm sorry, I couldn't generate a response for you. Please try again later"
         )
 
+    # If the response asks for a tool call, we need to interpret the tool call and respond accordingly
+    if response.tool_calls:
+        await message.channel.send(
+            "I am calling a tool for you, please wait a bit (it may take a minute)"
+        )
+        tool_call_json = response.tool_calls[0]
+        log.info(f"Tool call: {tool_call_json}")
+        arguments = json.loads(tool_call_json.function.arguments)
+        function_name: str = tool_call_json.function.name
+        if function_name == "get_transcription":
+            transcription = get_transcription(arguments.get("link"), gpt)
+            resulting_content = json.dumps(
+                {"link": arguments.get("link"), "transcription": transcription}
+            )
+        resulting_message = {
+            "role": "tool",
+            "content": resulting_content,
+            "tool_call_id": tool_call_json.id,
+        }
+        response = await call_gpt(
+            user_query + [response] + [resulting_message],
+            thread_id,
+            gpt,
+            thread_conversation_history,
+            tools,
+        )
+
     # If the message isn't too big we just send it. Otherwise, parse it accordingly
-    if len(response) < 1900:
-        await message.channel.send(response)
+    if thread_id:
+        thread_conversation_history[thread_id].append(response)
+
+
+    text: str = response.content
+    if len(text) < 1900:
+        await message.channel.send(text)
         return
     else:
-        await send_large_message(response, message)
+        await send_large_message(text, message)
         return
-
-
-def format_user_query(message: discord.Message) -> list:
-    """Given a message from a user for gpt, format it to ask gpt to format
-    in markdown and separate response into smaller chunks"""
-    user_query = message.content.split(f"<@{client.user.id}> ")[1]
-    user_query = (
-        user_query
-        + ". Format your response to be in markdown without any '```' wrappers. \
-        Do not provide anything but the markdown response itself. \
-        In addition, I am aware that you are an AI, so you do not need to mention that. \
-        Do not give warnings or notes about how the data may not be up to date or that you are an AI. \
-        If your resposne is longer than 1900 characters, \
-        please separate each ~1200 character blocks with a newline character"
-    )
-    formatted_query = {"role": "user", "content": user_query}
-    log.info(
-        f"GPT bot mentioned, got prompt from user {message.author}:\n {user_query}"
-    )
-    return [formatted_query]
-
-
-def handle_thread_message(message: discord.Message, user_query: list) -> list:
-    """If a message comes from a thread, the method grabs all of the previous messages sent to use
-    as context in the gpt query"""
-    thread_id = message.channel.id
-    if thread_id not in list(thread_conversation_history.keys()):
-        log.info(f"Thread ID {thread_id} not found in history, adding")
-        thread_conversation_history[thread_id] = []
-    thread_conversation_history[thread_id].append(user_query[0])
-    return thread_conversation_history[thread_id]
-
-
-async def send_large_message(gpt_response: str, message: discord.Message):
-    """Method splits a gpt response into ~1500 character chunks due to discord's
-    message length limit. Each chunk is sent as a message separately"""
-    temp_message = ""
-    split_response = gpt_response.split("\n")
-    for i in range(len(split_response)):
-        temp_message = temp_message + f"{split_response[i]}\n"
-        if len(temp_message) > 1500:
-            await message.channel.send(temp_message)
-            temp_message = ""
-    if temp_message != "":
-        await message.channel.send(temp_message)
-    return
-
-
-async def call_gpt(prompt: list, thread_id: int | None) -> str | None:
-    """Given a prompt (either a direct prompt string or a list of chat history including the
-    new message), the method will send the prompt to gpt and return the response text
-    """
-    log.info(f"Using the following prompt when calling gpt api: {prompt}")
-    response = gpt.chat.completions.create(model="gpt-4o", messages=prompt)
-    log.info(f"Got the following candidates from GPT:\n {response.choices}")
-    first_candidate = response.choices[0].message
-    if thread_id:
-        thread_conversation_history[thread_id].append(first_candidate)
-    return first_candidate.content
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.INFO)
 
     log = logging.getLogger(__name__)
 

@@ -1,0 +1,21 @@
+[
+    {
+        "type": "function",
+        "function": {
+            "name": "get_transcription",
+            "strict": true,
+            "description": "When asked about the content of a youtube video, utilize this function to obtain a transcription of the video's audio for your use.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "link": {
+                        "type": "string",
+                        "description": "The Youtube URL of the video that needs transcribing"
+                    }
+                },
+                "required": ["link"],
+                "additionalProperties": false
+            }
+        }
+    }
+]
