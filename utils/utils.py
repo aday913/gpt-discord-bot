@@ -1,4 +1,5 @@
 import logging
+import json
 
 import discord
 from openai import OpenAI
@@ -8,8 +9,30 @@ log = logging.getLogger(__name__)
 
 
 # GPT client
-def get_gpt(api_key):
-    return OpenAI(api_key=api_key)
+def get_gpt(api_key) -> OpenAI:
+    try:
+        ai = OpenAI(api_key=api_key)
+    except Exception as error:
+        log.error(f"Error creating OpenAI client: {error}")
+        raise error
+    return ai
+
+def get_tools() -> list:
+    """Get the tools from the function_configs.json file"""
+    log.info("Getting tools from function_configs.json")
+    tools = []
+    function_configs = {}
+    with open("utils/function_configs.json", "r") as f:
+        function_configs = json.load(f)
+    if function_configs == {}:
+        log.error("Function configs are empty")
+        raise Exception("Function configs are empty")
+
+    for tool in function_configs:
+        tools.append(tool)
+
+    log.info(f"Got the following tools from function_configs.json: \n{tools}")
+    return tools
 
 
 def format_user_query(message: discord.Message, client: discord.Client) -> list:
@@ -61,15 +84,17 @@ async def send_large_message(gpt_response: str, message: discord.Message):
 
 
 async def call_gpt(
-    prompt: list, thread_id: int | None, gpt: OpenAI, thread_conversation_history: dict
-) -> str | None:
+    prompt: list,
+    thread_id: int | None,
+    gpt: OpenAI,
+    thread_conversation_history: dict,
+    tools: list,
+):
     """Given a prompt (either a direct prompt string or a list of chat history including the
     new message), the method will send the prompt to gpt and return the response text
     """
     log.info(f"Using the following prompt when calling gpt api: {prompt}")
-    response = gpt.chat.completions.create(model="gpt-4o", messages=prompt)
+    response = gpt.chat.completions.create(model="gpt-4o", messages=prompt, tools=tools)
     log.info(f"Got the following candidates from GPT:\n {response.choices}")
     first_candidate = response.choices[0].message
-    if thread_id:
-        thread_conversation_history[thread_id].append(first_candidate)
-    return first_candidate.content
+    return first_candidate
