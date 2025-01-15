@@ -12,7 +12,13 @@ def get_transcription(link: str, gpt: OpenAI):
     """Given a youtube URL, return the transcription of the video"""
 
     # First we can clean up the youtube link to get the video id
-    video_id = link.split("v=")[1].split("&")[0]
+    if 'youtu.be' in link:  # Mobile links
+        video_id = link.split('.be/')[1].split('?')[0]
+    elif 'youtube.com' in link:  # Desktop links
+        video_id = link.split("v=")[1].split("&")[0]
+    else:
+        log.error(f"Invalid youtube link: {link}")
+        return "Invalid youtube link"
     formatted_link = f"https://www.youtube.com/watch?v={video_id}"
 
     # Then we need to download the audio file from the link
@@ -30,6 +36,7 @@ def get_transcription(link: str, gpt: OpenAI):
     # Then we use the OpenAI whisper 1 model to transcribe the audio file
     audio_file = open("downloaded_audio.m4a", "rb")
     try:
+        log.info("Attempting to transcribe audio file downloaded_audio.m4a")
         transcription = gpt.audio.transcriptions.create(
             model="whisper-1", file=audio_file, response_format="text"
         )
