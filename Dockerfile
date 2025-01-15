@@ -9,5 +9,7 @@ COPY . ./
 
 RUN chmod a+x download_audio.sh
 
+RUN pip install -U yt-dlp
+
 CMD ["python", "main.py"]
 
